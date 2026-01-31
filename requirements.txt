@@ -1,0 +1,3 @@
+matrix-nio
+qasync
+pyqt5
