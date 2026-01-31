@@ -479,24 +479,11 @@ class MainWindow(QtWidgets.QMainWindow):
     
     @Slot(QtCore.QModelIndex)
     def on_message_double_click(self, index):
-        """Handle double-click on message - jump to reply or open image."""
+        """Handle double-click on message - prioritize image or jump to reply."""
         from models.messages import MessageModel
         
-        # 1. Check if it's a reply and we should jump
-        parent_id = index.data(MessageModel.ReplyParentRole)
-        if parent_id:
-            row = self.message_model.get_row_by_event_id(parent_id)
-            if row != -1:
-                print(f"DEBUG: Jumping to reply parent at row {row}")
-                target_index = self.message_model.index(row, 0)
-                self.message_view.scrollTo(target_index, QtWidgets.QAbstractItemView.PositionAtCenter)
-                self.message_view.setCurrentIndex(target_index)
-                return
-
-        # 2. Check if this is an image message
+        # 1. Check if this is an image message first (Highest priority)
         mxc_url = index.data(MessageModel.ImageUrlRole)
-        print(f"DEBUG: Double-clicked. mxc_url: {mxc_url}")
-        
         if mxc_url and mxc_url.startswith("mxc://"):
             print(f"DEBUG: Opening image {mxc_url}")
             # Check if image is cached
@@ -506,13 +493,25 @@ class MainWindow(QtWidgets.QMainWindow):
                 print(f"DEBUG: Opening cached file: {local_path}")
                 import os
                 try:
-                    os.startfile(str(local_path))  # Windows-specific
+                    os.startfile(str(local_path))
                 except Exception as e:
-                    print(f"DEBUG: os.startfile failed: {e}")
+                    print(f"ERROR: Could not open image: {e}")
             else:
                 print(f"DEBUG: Image not cached, downloading...")
                 # Download and open
                 asyncio.create_task(self._download_and_open_image(mxc_url))
+            return # Don't jump if we opened an image
+
+        # 2. Check if it's a reply and we should jump (Second priority)
+        parent_id = index.data(MessageModel.ReplyParentRole)
+        if parent_id:
+            row = self.message_model.get_row_by_event_id(parent_id)
+            if row != -1:
+                print(f"DEBUG: Jumping to reply parent at row {row}")
+                target_index = self.message_model.index(row, 0)
+                self.message_view.scrollTo(target_index, QtWidgets.QAbstractItemView.PositionAtCenter)
+                self.message_view.setCurrentIndex(target_index)
+                return
         else:
              print("DEBUG: Not an image message or no mxc_url")
     
