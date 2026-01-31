@@ -418,27 +418,32 @@ class MatrixWorker(QtCore.QObject):
             
             server_name, media_id = parts
             
-            # Prioritize full download for high quality (as requested by user)
+            # 1. Try full resolution download first
+            print(f"DEBUG: [Final Fix] Downloading {mxc_url}...")
             resp = await self.client.download(server_name, media_id)
             
             if hasattr(resp, 'body') and resp.body:
-                print(f"DEBUG: Downloaded full image {mxc_url}, size: {len(resp.body)} bytes")
+                print(f"DEBUG: Success: Original image downloaded.")
                 return resp.body
             
-            # Fallback to thumbnail only if full download fails
+            # 2. Fallback to thumbnail using library defaults
+            print(f"DEBUG: Original failed. Trying thumbnail...")
             try:
                 resp = await self.client.thumbnail(
                     server_name, 
                     media_id,
-                    width=1000, # Request a larger thumbnail if we must
-                    height=1000
+                    width=1280, 
+                    height=720
+                    # Note: Omitting 'method' to avoid Enum/str conflicts in different nio versions
                 )
                 
                 if hasattr(resp, 'body') and resp.body:
-                    print(f"DEBUG: Downloaded high-res thumbnail {mxc_url}, size: {len(resp.body)} bytes")
+                    print(f"DEBUG: Success: Thumbnail downloaded.")
                     return resp.body
             except Exception as thumb_error:
-                print(f"DEBUG: Thumbnail fallback failed as well: {thumb_error}")
+                print(f"DEBUG: Thumbnail fallback failed: {thumb_error}")
+            
+            return None
             
             return None
         

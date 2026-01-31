@@ -6,6 +6,7 @@ from core.client import MatrixWorker
 
 import asyncio
 import sys
+import os
 
 class MainWindow(QtWidgets.QMainWindow):
     """
@@ -473,10 +474,41 @@ class MainWindow(QtWidgets.QMainWindow):
         if action == copy_username_action:
             # Copy username to clipboard
             QtWidgets.QApplication.clipboard().setText(sender)
-        elif action == copy_message_action:
+        if action == copy_message_action:
             # Copy message text to clipboard
             QtWidgets.QApplication.clipboard().setText(message_text)
-    
+
+    def _open_file_natively(self, path):
+        """High-reliability cross-platform file opening."""
+        if not path:
+            print("ERROR: _open_file_natively called with empty path")
+            return
+            
+        path_str = str(path)
+        if not os.path.exists(path_str):
+            print(f"ERROR: File does not exist for opening: {path_str}")
+            return
+            
+        abs_path = os.path.abspath(path_str)
+        print(f"DEBUG: Opening file natively: {abs_path}")
+        
+        if sys.platform == 'win32':
+            try:
+                # os.startfile is the most reliable way on Windows
+                os.startfile(abs_path)
+                print("DEBUG: os.startfile initiated.")
+                return
+            except Exception as e:
+                print(f"DEBUG: os.startfile failed ({e}), trying QDesktopServices...")
+        
+        # Fallback for Windows or primary for Linux/macOS
+        url = QtCore.QUrl.fromLocalFile(abs_path)
+        success = QtGui.QDesktopServices.openUrl(url)
+        if success:
+            print(f"DEBUG: QDesktopServices opened URL: {url.toString()}")
+        else:
+            print(f"ERROR: QDesktopServices failed to open URL: {url.toString()}")
+
     @Slot(QtCore.QModelIndex)
     def on_message_double_click(self, index):
         """Handle double-click on message - prioritize image or jump to reply."""
@@ -484,21 +516,16 @@ class MainWindow(QtWidgets.QMainWindow):
         
         # 1. Check if this is an image message first (Highest priority)
         mxc_url = index.data(MessageModel.ImageUrlRole)
-        if mxc_url and mxc_url.startswith("mxc://"):
-            print(f"DEBUG: Opening image {mxc_url}")
-            # Check if image is cached
+        
+        if mxc_url and str(mxc_url).startswith("mxc://"):
             if self.image_cache.is_cached(mxc_url):
                 # Open cached image
                 local_path = self.image_cache.get_cache_path(mxc_url)
-                print(f"DEBUG: Opening cached file: {local_path}")
-                import os
-                try:
-                    os.startfile(str(local_path))
-                except Exception as e:
-                    print(f"ERROR: Could not open image: {e}")
+                if local_path and local_path.exists():
+                    self._open_file_natively(local_path)
+                else:
+                    asyncio.create_task(self._download_and_open_image(mxc_url))
             else:
-                print(f"DEBUG: Image not cached, downloading...")
-                # Download and open
                 asyncio.create_task(self._download_and_open_image(mxc_url))
             return # Don't jump if we opened an image
 
@@ -518,13 +545,17 @@ class MainWindow(QtWidgets.QMainWindow):
     async def _download_and_open_image(self, mxc_url):
         """Download image and open it."""
         try:
+            # Force original quality
+            print(f"DEBUG: Starting download for {mxc_url}...")
             data = await self.worker.download_image(mxc_url)
             if data:
                 local_path = self.image_cache.save_image(mxc_url, data)
-                import os
-                os.startfile(str(local_path))  # Windows-specific
+                print(f"DEBUG: Image saved to {local_path}, opening...")
+                self._open_file_natively(local_path)
+            else:
+                print(f"ERROR: Download returned no data for {mxc_url}")
         except Exception as e:
-            print(f"DEBUG: Failed to open image: {e}")
+            print(f"DEBUG: Failed to download/open image: {e}")
     
     @Slot(QtCore.QModelIndex)
     def on_space_clicked(self, index):
