@@ -1,6 +1,6 @@
 # OMOMatrix
 
-A lightweight, high-performance Matrix client built with **Python**, **Qt5 (PyQt5)**, and **matrix-nio**. Designed to be fast, memory-efficient, and feature-rich while maintaining a modern, Discord-like 3-column layout.
+A lightweight, high-performance Matrix client built with **Python**, **Qt5 (PyQt5)**, and **matrix-nio**. Designed to be fast and memory-efficient while maintaining a modern, Discord-like 3-column layout.
 
 ## Features
 
