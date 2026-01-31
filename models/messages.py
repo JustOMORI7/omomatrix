@@ -2,16 +2,8 @@ from utils.qt import QtCore, QtGui
 from typing import List, Any
 from datetime import datetime
 import re
-
-# Diverse high-contrast colors for better distinction
-USER_COLORS = [
-    "#FF5733", "#33FF57", "#3357FF", "#FF33FB", "#57FF33", 
-    "#FB33FF", "#33FBFF", "#FFB533", "#33FFB5", "#B533FF",
-    "#FF3333", "#33FF33", "#3333FF", "#FFFF33", "#33FFFF",
-    "#FF8033", "#80FF33", "#3380FF", "#FF3380", "#8033FF",
-    "#33FF80", "#FFD700", "#00FF7F", "#4169E1", "#FF1493",
-    "#00CED1", "#FF4500", "#32CD32", "#8A2BE2", "#FF6347"
-]
+import zlib
+import colorsys
 
 class MessageModel(QtCore.QAbstractListModel):
     """
@@ -194,6 +186,32 @@ class MessageModel(QtCore.QAbstractListModel):
                 return i
         return -1
 
+    def _get_user_color_hex(self, user_id):
+        """Generate a deterministic, high-contrast color using discrete hue segments."""
+        if not user_id:
+            return "#888888"
+            
+        # Use adler32 for a simple deterministic hash
+        u_hash = zlib.adler32(user_id.encode('utf-8'))
+        
+        # 16-Segment Discrete Hue: 
+        # Divide 360 degrees into 16 sectors (22.5 degrees each)
+        # This ensures users are mathematically spread across the color wheel
+        sector = u_hash % 16
+        hue = (sector * 22.5) / 360.0
+        
+        # Saturation: 80% for high vibrancy
+        saturation = 0.80
+        
+        # Lightness: 45% is the sweet spot for both light and dark themes
+        lightness = 0.45
+        
+        # Convert HLS to RGB
+        r, g, b = colorsys.hls_to_rgb(hue, lightness, saturation)
+        
+        # Convert to hex
+        return "#{:02x}{:02x}{:02x}".format(int(r*255), int(g*255), int(b*255))
+
     def rowCount(self, parent=QtCore.QModelIndex()):
         if not self._current_room_id:
             return 0
@@ -229,8 +247,7 @@ class MessageModel(QtCore.QAbstractListModel):
                 time_str = dt.strftime("%H:%M")
             
             # 2. Pick a color for the user based on their ID
-            color_idx = hash(user_id) % len(USER_COLORS)
-            user_color = USER_COLORS[color_idx]
+            user_color = self._get_user_color_hex(user_id)
             
             # 3. Handle message body (with reply formatting)
             body = self._format_body(event)

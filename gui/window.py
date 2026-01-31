@@ -464,8 +464,8 @@ class MainWindow(QtWidgets.QMainWindow):
         # Create context menu
         menu = QtWidgets.QMenu(self)
         
-        copy_username_action = menu.addAction(f"Kullanıcı Adını Kopyala ({sender})")
-        copy_message_action = menu.addAction("Mesajı Kopyala")
+        copy_username_action = menu.addAction(f"Copy Username ({sender})")
+        copy_message_action = menu.addAction("Copy Message")
         
         # Show menu and get selected action
         action = menu.exec_(self.message_view.viewport().mapToGlobal(pos))
