@@ -50,8 +50,6 @@ pip3 install --user -r requirements.txt
 Run the application:
 ```bash
 python3 main.py
-# or
-./run.sh
 ```
 
 On first launch, you'll be prompted to log in with your Matrix credentials:
@@ -68,33 +66,6 @@ This project uses:
 - **matrix-nio** for Matrix protocol implementation
 - **SQLite** for local data storage
 - **aiohttp** for async HTTP operations
-
-### Project Structure
-
-```
-omomatrix/
-├── main.py              # Application entry point
-├── config.py            # Configuration management
-├── matrix/              # Matrix client layer
-│   ├── client.py        # Matrix client wrapper
-│   ├── storage.py       # Credential storage
-│   ├── room_manager.py  # Room/space management
-│   └── avatar_manager.py # Avatar handling
-├── gui/                 # GTK4 UI components
-│   ├── application.py   # GTK Application
-│   ├── main_window.py   # Main window
-│   ├── login_window.py  # Login screen
-│   ├── room_list.py     # Room sidebar
-│   ├── message_view.py  # Message timeline
-│   ├── member_list.py   # Member list
-│   ├── widgets/         # Custom widgets
-│   └── style.css        # UI styling
-└── requirements.txt     # Python dependencies
-```
-
-## License
-
-[Your license here]
 
 ## Contributing
 
