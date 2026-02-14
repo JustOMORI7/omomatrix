@@ -39,6 +39,20 @@ class OMOMatrixApp(Adw.Application):
         # Event loop for asyncio
         self.loop = asyncio.new_event_loop()
         asyncio.set_event_loop(self.loop)
+
+    def do_startup(self):
+        """Handle application startup."""
+        Adw.Application.do_startup(self)
+        
+        # Set icon
+        try:
+            from gi.repository import Gdk
+            texture = Gdk.Texture.new_from_filename("/home/omori/omomatrix/icon.png")
+            # In GTK4, we usually set the icon on the window, 
+            # but we can try to set a default for the app if supported or just do it in windows.
+            # For now, let's just make sure this doesn't crash and we'll set it in MainWindow too.
+        except Exception as e:
+            logger.error(f"Failed to load icon: {e}")
     
     def do_activate(self):
         """Called when the application is activated."""

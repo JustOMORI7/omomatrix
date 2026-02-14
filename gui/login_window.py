@@ -33,6 +33,14 @@ class LoginWindow(Adw.Window):
         self.set_default_size(400, 500)
         self.set_title("OMOMatrix - Login")
         
+        # Set icon
+        try:
+            from gi.repository import Gdk
+            texture = Gdk.Texture.new_from_filename("/home/omori/omomatrix/icon.png")
+            # Window icon is typically handled via theme or set_icon_name in GTK4
+        except Exception as e:
+            logger.error(f"Failed to set LoginWindow icon: {e}")
+        
         # Create UI
         self._build_ui()
     

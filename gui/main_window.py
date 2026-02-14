@@ -41,6 +41,16 @@ class MainWindow(Adw.ApplicationWindow):
         self.set_default_size(1200, 800)
         self.set_title("OMOMatrix")
         
+        # Set icon
+        try:
+            from gi.repository import Gdk
+            texture = Gdk.Texture.new_from_filename("/home/omori/omomatrix/icon.png")
+            self.set_icon_name("omomatrix") # For theme engines
+            # In some GTK4 versions we might need a different way, 
+            # but usually setting the icon on the window or application is enough.
+        except Exception as e:
+            logger.error(f"Failed to set MainWindow icon: {e}")
+        
         # Build UI
         self._build_ui()
         

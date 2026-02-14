@@ -1,0 +1,10 @@
+[Desktop Entry]
+Name=OMOMatrix
+Comment=Performance-optimized Matrix client using GTK4
+Exec=python3 /home/omori/omomatrix/main.py
+Icon=/home/omori/omomatrix/icon.png
+Terminal=false
+Type=Application
+Categories=Network;Chat;InstantMessaging;
+Keywords=Matrix;Chat;Matrix.org;
+StartupWMClass=org.omomatrix.OMOMatrixClient
