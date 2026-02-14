@@ -1,0 +1,177 @@
+/* OMOMatrix GTK4 Styles */
+
+/* Modern color scheme inspired by Element/Cinny */
+/* We use standard named colors provided by the theme (Adwaita) */
+@define-color sidebar_bg_color @window_bg_color;
+@define-color message_bg_color @view_bg_color;
+
+
+/* Sidebar styling */
+.sidebar {
+    background-color: @window_bg_color;
+    border-right: 1px solid alpha(@window_fg_color, 0.1);
+}
+
+/* Avatar styling (Rounded Squares with 10px radius) */
+avatar {
+    border-radius: 10px !important;
+    overflow: hidden;
+}
+
+.avatar,
+.room-avatar,
+.member-avatar {
+    border-radius: 10px !important;
+}
+
+/* Reply Preview area (above entry) */
+.reply-preview {
+    background-color: alpha(@accent_bg_color, 0.1);
+    border-left: 4px solid @accent_bg_color;
+    border-radius: 8px 8px 0 0;
+    padding: 8px 12px;
+}
+
+.avatar {
+    min-width: 32px;
+    min-height: 32px;
+}
+
+.room-avatar {
+    min-width: 40px;
+    min-height: 40px;
+}
+
+.member-avatar {
+    min-width: 32px;
+    min-height: 32px;
+}
+
+/* Message list styling */
+.message-list {
+    background-color: @message_bg_color;
+}
+
+.message-list>listboxrow {
+    background-color: transparent;
+    border-radius: 8px;
+    margin: 2px 8px;
+}
+
+.message-list>listboxrow:hover {
+    background-color: alpha(@accent_bg_color, 0.05);
+}
+
+/* Grouped messages (Discord style) */
+.grouped {
+    margin-top: 0;
+}
+
+/* Reply reference */
+.reply-reference {
+    background-color: alpha(@accent_bg_color, 0.08);
+    border-left: 3px solid @accent_bg_color;
+    border-radius: 4px;
+    padding: 6px 10px;
+    margin-bottom: 6px;
+    font-size: 0.85rem;
+}
+
+.reply-reference label {
+    color: alpha(@window_fg_color, 0.7);
+}
+
+/* Error text */
+.error {
+    color: @destructive_fg_color;
+}
+
+/* Toolbar styling */
+.toolbar {
+    background-color: alpha(@headerbar_bg_color, 0.95);
+    border-bottom: 1px solid alpha(@window_fg_color, 0.1);
+}
+
+/* New messages indicator */
+.new-messages-indicator {
+    background-color: @accent_bg_color;
+    color: @accent_fg_color;
+    border-radius: 20px;
+    padding: 6px 16px;
+    font-weight: bold;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.new-messages-indicator:hover {
+    background-color: @accent_color;
+}
+
+/* Image messages */
+.message-image {
+    border-radius: 12px;
+    margin: 4px 0;
+    min-width: 200px;
+    min-height: 150px;
+    max-width: 400px;
+    max-height: 300px;
+    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+    cursor: pointer;
+    transition: transform 0.2s ease;
+}
+
+.message-image:hover {
+    transform: scale(1.02);
+}
+
+/* Load more button */
+.load-more-button {
+    margin: 12px auto;
+    color: @accent_color;
+    font-weight: bold;
+    padding: 8px 16px;
+}
+
+.load-more-button:hover {
+    background-color: alpha(@accent_bg_color, 0.1);
+}
+
+/* Custom button styles for modern look */
+button.pill {
+    border-radius: 20px;
+    padding: 8px 20px;
+}
+
+/* Dark theme support */
+@media (prefers-color-scheme: dark) {
+    .reply-reference {
+        background-color: alpha(@accent_bg_color, 0.15);
+    }
+}
+/* Full-screen Image Viewer */
+.image-viewer-window {
+    background-color: black;
+}
+
+.viewer-image {
+    background-color: transparent;
+}
+
+.viewer-close-button {
+    background-color: rgba(0, 0, 0, 0.5);
+    color: white;
+    border: none;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.3);
+}
+
+.viewer-close-button:hover {
+    background-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Rounded Avatars */
+.avatar, .room-avatar, .member-avatar {
+    border-radius: 8px;
+}
+
+.space-name {
+    font-weight: bold;
+}

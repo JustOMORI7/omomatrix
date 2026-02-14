@@ -1,0 +1,20 @@
+# Matrix Client
+matrix-nio[e2e]>=0.24.0
+
+# GTK4 bindings
+PyGObject>=3.42.0
+
+# HTTP client for async operations
+aiohttp>=3.9.0
+
+# Image processing for avatars
+Pillow>=10.0.0
+
+# File type detection
+python-magic>=0.4.27
+
+# Keyring for secure credential storage
+keyring>=24.0.0
+
+# JSON handling
+jsonpickle>=3.0.0
