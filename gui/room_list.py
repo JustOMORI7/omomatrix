@@ -78,8 +78,8 @@ class RoomListView(Gtk.Box):
         hierarchy = self.matrix_client.get_hierarchy()
         rooms = self.matrix_client.get_rooms()
         
-        # 1. Determine the target order of IDs (including headers)
-        target_rows = [] # list of (id, type, depth)
+        # 1. Determine the target order of IDs
+        target_rows = [] # list of (id, rtype, depth)
         
         for space_id in hierarchy["top_level_spaces"]:
             room = rooms.get(space_id)
@@ -91,21 +91,10 @@ class RoomListView(Gtk.Box):
             for rid in hierarchy["orphans"]:
                 target_rows.append((rid, "room", 0))
         
-        # 2. Update the ListBox to match target_rows without removing unchanged ones
-        # Get current rows
-        current_rows = []
-        child = self.main_list.get_first_child()
-        while child:
-            current_rows.append(child)
-            child = child.get_next_sibling()
-            
-        # Clear mapping for this update
-        active_ids = set()
+        # 2. Incremental Update
+        active_widgets = set()
         
-        # 3. Incremental Update
         for index, (row_id, rtype, depth) in enumerate(target_rows):
-            active_ids.add(row_id)
-            
             # Find or create the row widget
             if rtype == "header":
                 row_widget = self._get_header_row(row_id, "Rooms & DMs")
@@ -116,30 +105,35 @@ class RoomListView(Gtk.Box):
                 room = rooms.get(row_id)
                 row_widget = self._get_room_row(row_id, room, depth)
             
-            # Check if row is already in the right position
+            active_widgets.add(row_widget)
+            
+            # Check position
             current_at_index = self.main_list.get_row_at_index(index)
             if current_at_index != row_widget:
-                # Remove if it's somewhere else
+                # Safely move to the correct index
                 parent = row_widget.get_parent()
-                if parent:
+                if parent == self.main_list:
+                    # In GTK4, to reorder we can remove and insert at new index
+                    self.main_list.remove(row_widget)
+                elif parent:
                     parent.remove(row_widget)
-                # Insert at correct position
+                
                 self.main_list.insert(row_widget, index)
         
-        # 4. Remove widgets no longer in the list
+        # 3. Remove widgets no longer in the list
         child = self.main_list.get_first_child()
         while child:
             next_child = child.get_next_sibling()
-            cid = getattr(child, 'row_id', None)
-            if cid not in active_ids:
+            if child not in active_widgets:
                 self.main_list.remove(child)
             child = next_child
 
-        # Restore highlight
+        # 4. Restore highlight
         if self.selected_room:
             row = self.room_rows.get(self.selected_room)
             if row and row.get_parent() == self.main_list:
-                self.main_list.select_row(row)
+                # Use idle_add to ensure selection happens after reordering completes
+                GLib.idle_add(lambda: self.main_list.select_row(row))
 
     def _build_target_order(self, space_id, room, hierarchy, rooms, depth, target_rows):
         target_rows.append((space_id, "space", depth))
@@ -160,7 +154,6 @@ class RoomListView(Gtk.Box):
             return self.header_rows[row_id]
             
         row = Gtk.ListBoxRow()
-        row.row_id = row_id
         row.set_activatable(False)
         row.set_selectable(False)
         
@@ -168,7 +161,7 @@ class RoomListView(Gtk.Box):
         label.set_halign(Gtk.Align.START)
         label.set_margin_top(8)
         label.set_margin_bottom(4)
-        label.set_margin_start(8) # Reduced margin to move left
+        label.set_margin_start(4) # Aligned with space arrow position
         label.add_css_class("space-name")
         row.set_child(label)
         
@@ -177,21 +170,20 @@ class RoomListView(Gtk.Box):
 
     def _get_space_row(self, space_id, room, depth):
         if space_id in self.room_rows:
-            # Update rotation if needed
+            # Update rotation
             row = self.room_rows[space_id]
-            btn = row.get_child().get_first_child()
+            box = row.get_child()
+            btn = box.get_first_child()
             is_expanded = self.expander_states.get(space_id, False)
             btn.set_icon_name("pan-down-symbolic" if is_expanded else "pan-end-symbolic")
             return row
             
         row = Gtk.ListBoxRow()
-        row.row_id = space_id
-        
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
-        box.set_spacing(8) # Tighter spacing
+        box.set_spacing(8)
         box.set_margin_top(4)
         box.set_margin_bottom(4)
-        box.set_margin_start(4 + (depth * 12)) # Reduced starting margin to move everything left
+        box.set_margin_start(4 + (depth * 12))
         box.set_margin_end(8)
         
         is_expanded = self.expander_states.get(space_id, False)
@@ -221,15 +213,12 @@ class RoomListView(Gtk.Box):
             return self.room_rows[room_id]
             
         row = Gtk.ListBoxRow()
-        row.row_id = room_id
-        
         box = Gtk.Box(orientation=Gtk.Orientation.HORIZONTAL)
         box.set_spacing(12)
         box.set_margin_top(4)
         box.set_margin_bottom(4)
-        # Room indentation: 
-        # For orphan rooms (depth 0, not in a space), we use 4px to match space headers.
-        # For nested rooms, we use deeper indentation to show hierarchy.
+        
+        # Room indentation: Orphan rooms (depth 0) align with headers.
         start_margin = 4 if depth == 0 else 32 + (depth * 12)
         box.set_margin_start(start_margin) 
         box.set_margin_end(12)
@@ -242,14 +231,12 @@ class RoomListView(Gtk.Box):
         label = Gtk.Label(label=room.display_name or room_id)
         label.set_halign(Gtk.Align.START)
         label.set_ellipsize(3)
-        label.set_hexpand(True) # Push everything else to the right
+        label.set_hexpand(True)
         box.append(label)
         
-        # Encryption Indicator
         if hasattr(room, 'encrypted') and room.encrypted:
             lock_icon = Gtk.Image.new_from_icon_name("security-high-symbolic")
             lock_icon.set_opacity(0.5)
-            lock_icon.set_tooltip_text("End-to-End Encrypted")
             box.append(lock_icon)
         
         row.set_child(box)
@@ -273,14 +260,19 @@ class RoomListView(Gtk.Box):
 
     def on_expander_clicked(self, btn, space_id):
         self.expander_states[space_id] = not self.expander_states.get(space_id, False)
-        # Re-sync icon immediately for feedback
-        btn.set_icon_name("pan-down-symbolic" if self.expander_states[space_id] else "pan-end-symbolic")
         self.refresh_rooms()
 
     def on_row_activated(self, list_box, row):
-        if hasattr(row, 'row_id'):
-            self.selected_room = row.row_id
-            self.emit('room-selected', row.row_id)
+        # We need to find the room_id from self.room_rows since it's not stored on the row object directly here
+        room_id = None
+        for rid, widget in self.room_rows.items():
+            if widget == row:
+                room_id = rid
+                break
+        
+        if room_id:
+            self.selected_room = room_id
+            self.emit('room-selected', room_id)
 
     def on_join_clicked(self, _button):
         dialog = Gtk.Dialog(title="Join Room", transient_for=self.get_root(), modal=True)
@@ -288,10 +280,8 @@ class RoomListView(Gtk.Box):
         dialog.add_button("Join", Gtk.ResponseType.OK)
         entry = Gtk.Entry(placeholder_text="#room:matrix.org")
         content = dialog.get_content_area()
-        content.set_margin_top(12)
-        content.set_margin_bottom(12)
-        content.set_margin_start(12)
-        content.set_margin_end(12)
+        content.set_margin_top(12); content.set_margin_bottom(12)
+        content.set_margin_start(12); content.set_margin_end(12)
         content.append(entry)
         dialog.connect('response', self.on_join_dialog_response, entry)
         dialog.present()

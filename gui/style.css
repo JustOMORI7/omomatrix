@@ -77,11 +77,11 @@ avatar {
 }
 
 /* Gtk.Expander styling */
-/* We use opacity and width/height 0 to hide it without invalid 'display' property */
+/* We use opacity and min-size to hide it without invalid properties */
 expander.room-expander > title > arrow {
     opacity: 0;
-    width: 0;
-    height: 0;
+    min-width: 0;
+    min-height: 0;
 }
 
 expander.room-expander > title {

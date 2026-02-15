@@ -70,23 +70,36 @@ class MainWindow(Adw.ApplicationWindow):
             # Initial sync or force refresh
             self.room_list.refresh_rooms(None)
 
-    def on_verification_event(self, state, event):
+    def on_verification_event(self, state, tx_id, sender, device_id):
         """Handle SAS verification events from the client."""
-        tx_id = event.transaction_id
         
         def handle():
-            if state == "start":
+            if state == "request":
                 # Show incoming verification dialog
-                # Pass self.app.loop directly
-                dialog = VerificationDialog(self, self.matrix_client, self.app.loop, tx_id, event.sender)
+                dialog = VerificationDialog(self, self.matrix_client, self.app.loop, tx_id, sender)
                 self._verification_dialogs[tx_id] = dialog
                 dialog.present()
+                
+                # Accept the request to proceed to SAS using the device_id
+                self.app.loop.create_task(self.matrix_client.accept_verification_request(tx_id, sender, device_id))
+                
+            elif state == "start":
+                # Someone started the SAS part
+                dialog = self._verification_dialogs.get(tx_id)
+                if not dialog:
+                    dialog = VerificationDialog(self, self.matrix_client, self.app.loop, tx_id, sender)
+                    self._verification_dialogs[tx_id] = dialog
+                    dialog.present()
                 
                 # Automatically accept the START to proceed to key exchange
                 self.app.loop.create_task(self.matrix_client.accept_verification(tx_id))
                 
-            elif state in ["key", "accept"]:
-                # Both sides have shared keys, we can now show emojis
+                # Try to show emojis immediately if they are somehow ready
+                emojis = self.matrix_client.get_sas_emojis(tx_id)
+                if emojis: dialog.show_emojis(emojis)
+                
+            elif state in ["key", "accept", "mac"]:
+                # Both sides have shared keys or progress made, check for emojis
                 dialog = self._verification_dialogs.get(tx_id)
                 if dialog:
                     emojis = self.matrix_client.get_sas_emojis(tx_id)
@@ -101,6 +114,9 @@ class MainWindow(Adw.ApplicationWindow):
             elif state == "mac":
                 # Verification done
                 logger.info(f"Verification {tx_id} completed successfully")
+                dialog = self._verification_dialogs.get(tx_id)
+                if dialog:
+                    dialog.status_label.set_text("Verified! You can close this.")
                 
         GLib.idle_add(handle)
 

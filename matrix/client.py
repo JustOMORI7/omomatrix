@@ -22,12 +22,15 @@ from nio import (
     RoomMessagesResponse,
     ProfileGetResponse,
     ToDeviceEvent,
+    UnknownEvent,
+    UnknownToDeviceEvent,
     KeyVerificationEvent,
     KeyVerificationStart,
     KeyVerificationCancel,
     KeyVerificationKey,
     KeyVerificationMac,
     KeyVerificationAccept,
+    RoomKeyRequest,
     crypto
 )
 
@@ -42,537 +45,298 @@ class MatrixClient:
     """Wrapper around nio.AsyncClient with session management."""
     
     def __init__(self, homeserver: Optional[str] = None):
-        """Initialize Matrix client.
-        
-        Args:
-            homeserver: Matrix homeserver URL. If None, will load from storage.
-        """
         self.homeserver = homeserver
         self.client: Optional[AsyncClient] = None
         self.storage = CredentialStorage()
         self.media_manager = MediaManager()
-        
-        # Callbacks
         self.on_sync: Optional[Callable] = None
         self.on_message: Optional[Callable] = None
-        self.on_verification_event: Optional[Callable] = None # For SAS UI
-        
+        self.on_verification_event: Optional[Callable] = None 
         self._sync_task: Optional[asyncio.Task] = None
-        
-        # Active verification sessions: transaction_id -> Sas object
         self.verifications: Dict[str, Any] = {}
-        
-        # Performance optimizations
         self._profile_cache: Dict[str, Dict[str, Any]] = {}
         self._profile_requests: Dict[str, asyncio.Task] = {}
         self._profile_cache_path = config.cache_dir / "profiles.json"
         self._load_profile_cache()
     
     def _load_profile_cache(self):
-        """Load profile cache from disk."""
         if self._profile_cache_path.exists():
             try:
                 import json
                 with open(self._profile_cache_path, 'r') as f:
                     self._profile_cache = json.load(f)
-                logger.info(f"Loaded {len(self._profile_cache)} profiles from cache")
-            except Exception as e:
-                logger.error(f"Failed to load profile cache: {e}")
-                self._profile_cache = {}
+            except: self._profile_cache = {}
 
     def _save_profile_cache(self):
-        """Save profile cache to disk."""
         try:
             import json
-            # Ensure directory exists
             self._profile_cache_path.parent.mkdir(parents=True, exist_ok=True)
             with open(self._profile_cache_path, 'w') as f:
                 json.dump(self._profile_cache, f)
-            logger.debug(f"Saved {len(self._profile_cache)} profiles to cache")
-        except Exception as e:
-            logger.error(f"Failed to save profile cache: {e}")
+        except: pass
     
     async def login(self, username: str, password: str) -> bool:
-        """Login with username and password.
-        
-        Args:
-            username: Matrix username (without @)
-            password: User password
-            
-        Returns:
-            True if login successful, False otherwise
-        """
-        if not self.homeserver:
-            logger.error("No homeserver specified")
-            return False
-        
-        # Create client
-        # Ensure username is passed
-        self.client = AsyncClient(
-            homeserver=self.homeserver,
-            user=username,
-            store_path=str(config.store_path)
-        )
-        
-        # Attempt login
+        if not self.homeserver: return False
+        self.client = AsyncClient(homeserver=self.homeserver, user=username, store_path=str(config.store_path))
         try:
             response = await self.client.login(password=password, device_name="OMOMatrix")
-            
             if isinstance(response, LoginResponse):
-                logger.info(f"Logged in as {response.user_id}")
-                
-                # Save credentials
-                self.storage.save_credentials(
-                    homeserver=self.homeserver,
-                    user_id=response.user_id,
-                    access_token=response.access_token,
-                    device_id=response.device_id
-                )
-                
-                # Setup E2EE if available
-                if self.client.should_upload_keys:
-                    await self.client.keys_upload()
-                
+                self.storage.save_credentials(homeserver=self.homeserver, user_id=response.user_id, access_token=response.access_token, device_id=response.device_id)
+                self.client.load_store()
+                if self.client.should_upload_keys: await self.client.keys_upload()
                 return True
-            else:
-                logger.error(f"Login failed: {response}")
-                return False
-                
-        except Exception as e:
-            logger.error(f"Login error: {e}")
             return False
+        except: return False
     
     async def restore_session(self) -> bool:
-        """Restore session from stored credentials.
-        
-        Returns:
-            True if session restored, False otherwise
-        """
         creds = self.storage.load_credentials()
+        if not creds: return False
         
-        if not creds:
-            logger.info("No stored credentials found")
-            return False
+        # FIX: Strip any spaces that might have been saved in the database
+        user_id = creds['user_id'].strip()
+        device_id = creds['device_id'].strip()
+        self.homeserver = creds['homeserver'].strip()
         
-        self.homeserver = creds['homeserver']
-        
-        # Create client with stored credentials
+        # If we found spaces, save the cleaned version back to database
+        if user_id != creds['user_id'] or device_id != creds['device_id']:
+            logger.info("Cleaning up whitespace in stored credentials")
+            self.storage.save_credentials(
+                self.homeserver, user_id, creds['access_token'], device_id
+            )
+
         self.client = AsyncClient(
-            homeserver=self.homeserver,
-            user=creds['user_id'],
-            device_id=creds['device_id'],
+            homeserver=self.homeserver, 
+            user=user_id, 
+            device_id=device_id, 
             store_path=str(config.store_path)
         )
-        
-        # Restore access token
         self.client.access_token = creds['access_token']
-        
-        logger.info(f"Restored session for {creds['user_id']}")
-        
-        # Load encryption keys if available
-        if self.client.should_query_keys:
-            await self.client.keys_query()
-        
+        self.client.user_id = user_id
+        self.client.load_store()
+        if self.client.should_query_keys: await self.client.keys_query()
         return True
     
     async def logout(self):
-        """Logout and clear session."""
         if self.client:
-            try:
-                await self.client.logout()
-            except Exception as e:
-                logger.error(f"Logout error: {e}")
-            finally:
-                await self.client.close()
-                self.client = None
-        
-        # Clear stored credentials
+            try: await self.client.logout()
+            except: pass
+            finally: await self.client.close(); self.client = None
         self.storage.clear_credentials()
-        logger.info("Logged out")
     
     async def start_sync(self):
-        """Start sync loop to receive events."""
-        if not self.client:
-            logger.error("Client not initialized")
-            return
-        
-        # Register callbacks
+        if not self.client: return
         if self.on_message:
             self.client.add_event_callback(self.on_message, RoomMessageText)
             self.client.add_event_callback(self.on_message, RoomMessageImage)
             self.client.add_event_callback(self.on_message, MegolmEvent)
         
-        # Register E2EE verification callbacks
-        self.client.add_to_device_callback(self.handle_verification_event, KeyVerificationEvent)
+        # E2EE Callbacks
+        self.client.add_to_device_callback(self.handle_verification_event, ToDeviceEvent)
+        self.client.add_to_device_callback(self.handle_key_request, RoomKeyRequest)
         
-        # Start sync task
         self._sync_task = asyncio.create_task(self._sync_loop())
 
+    async def handle_key_request(self, event: RoomKeyRequest):
+        """Handle incoming key requests from our other devices."""
+        if not self.client: return
+        # Automatically share keys if the requesting device is verified
+        if self.client.device_store[event.sender][event.requesting_device_id].verified:
+            logger.info(f"Automatically sharing keys with verified device {event.requesting_device_id}")
+            await self.client.continue_key_share(event)
+
     async def handle_verification_event(self, event):
-        """Handle incoming E2EE verification events."""
-        logger.info(f"Received verification event: {type(event).__name__}")
+        sender = event.sender.strip() if event.sender else None
         
-        if isinstance(event, KeyVerificationStart):
-            # Someone started a verification with us
-            # In matrix-nio, the Sas object is created automatically when we receive start
-            if event.transaction_id not in self.verifications:
-                self.verifications[event.transaction_id] = self.client.key_verifications[event.transaction_id]
+        if isinstance(event, UnknownToDeviceEvent):
+            content = event.source.get("content", {})
+            tx_id = content.get("transaction_id")
+            if not tx_id: return
             
-            if self.on_verification_event:
-                self.on_verification_event("start", event)
-                
+            if event.type == "m.key.verification.request":
+                from_device = content.get("from_device", "*").strip()
+                self.verifications[tx_id] = {"state": "requested", "sender": sender, "device": from_device}
+                if self.on_verification_event: self.on_verification_event("request", tx_id, sender, from_device)
+            elif event.type == "m.key.verification.done":
+                if self.on_verification_event: self.on_verification_event("mac", tx_id, sender, "*")
+            return
+
+        if not isinstance(event, KeyVerificationEvent): return
+        tx_id = event.transaction_id
+
+        if isinstance(event, KeyVerificationStart):
+            if tx_id not in self.verifications or not hasattr(self.verifications[tx_id], 'get_emoji'):
+                self.verifications[tx_id] = self.client.key_verifications[tx_id]
+            from_device = getattr(event, 'from_device', "*").strip()
+            if self.on_verification_event: self.on_verification_event("start", tx_id, sender, from_device)
         elif isinstance(event, KeyVerificationCancel):
-            self.verifications.pop(event.transaction_id, None)
-            if self.on_verification_event:
-                self.on_verification_event("cancel", event)
-                
-        elif isinstance(event, KeyVerificationKey):
-            if self.on_verification_event:
-                self.on_verification_event("key", event)
-                
-        elif isinstance(event, KeyVerificationMac):
-            if self.on_verification_event:
-                self.on_verification_event("mac", event)
-                
-        elif isinstance(event, KeyVerificationAccept):
-            if self.on_verification_event:
-                self.on_verification_event("accept", event)
+            self.verifications.pop(tx_id, None)
+            if self.on_verification_event: self.on_verification_event("cancel", tx_id, sender, "*")
+        elif isinstance(event, (KeyVerificationKey, KeyVerificationAccept, KeyVerificationMac)):
+            state = "key" if isinstance(event, KeyVerificationKey) else ("accept" if isinstance(event, KeyVerificationAccept) else "mac")
+            if self.on_verification_event: self.on_verification_event(state, tx_id, sender, "*")
+
+    async def accept_verification_request(self, transaction_id: str, sender: str, device_id: str):
+        if not self.client: return
+        content = {"transaction_id": transaction_id, "methods": ["m.sas.v1"], "from_device": self.client.device_id}
+        try:
+            from nio.event_builders.direct_messages import ToDeviceMessage
+            msg = ToDeviceMessage("m.key.verification.ready", sender.strip(), device_id.strip(), content)
+            self.client.outgoing_to_device_messages.append(msg)
+            await self.client.send_to_device_messages()
+        except: pass
 
     async def start_verification(self, user_id: str, device_id: str):
-        """Initiate verification with another device."""
         if not self.client: return
-        
-        response = await self.client.verify_device(user_id, device_id)
+        response = await self.client.verify_device(user_id.strip(), device_id.strip())
         if response:
-            # Response is typically the transaction ID
             self.verifications[response] = self.client.key_verifications[response]
             return response
         return None
 
     async def accept_verification(self, transaction_id: str):
-        """Accept an incoming verification request."""
         if transaction_id in self.verifications:
-            await self.client.accept_verification(transaction_id)
-            # This triggers the SAS exchange
+            await self.client.accept_key_verification(transaction_id)
+            sas = self.verifications[transaction_id]
+            try:
+                from nio.event_builders.direct_messages import ToDeviceMessage
+                if hasattr(sas, 'accept_verification'):
+                    self.client.outgoing_to_device_messages.append(sas.accept_verification())
+                if hasattr(sas, 'share_key'):
+                    self.client.outgoing_to_device_messages.append(sas.share_key())
+                await self.client.send_to_device_messages()
+            except: pass
 
     async def confirm_sas(self, transaction_id: str):
-        """Confirm that SAS (emojis) match."""
         if transaction_id in self.verifications:
             sas = self.verifications[transaction_id]
-            # In nio, we call accept_sas on the Sas object
-            # and then get the MAC to send
             sas.accept_sas()
-            mac_event = sas.get_mac()
-            await self.client.to_device(mac_event)
-            logger.info(f"SAS confirmed for {transaction_id}")
+            self.client.outgoing_to_device_messages.append(sas.get_mac())
+            await self.client.send_to_device_messages()
+            if sas.verified:
+                await self.send_verification_done(transaction_id, sas.other_olm_device.user_id, sas.other_olm_device.device_id)
+
+    async def send_verification_done(self, transaction_id: str, sender: str, device_id: str):
+        try:
+            from nio.event_builders.direct_messages import ToDeviceMessage
+            msg = ToDeviceMessage("m.key.verification.done", sender, device_id, {"transaction_id": transaction_id})
+            self.client.outgoing_to_device_messages.append(msg)
+            await self.client.send_to_device_messages()
+        except: pass
 
     async def cancel_verification(self, transaction_id: str):
-        """Cancel an active verification."""
         if transaction_id in self.verifications:
-            await self.client.cancel_verification(transaction_id)
+            try: await self.client.cancel_key_verification(transaction_id)
+            except: pass
             self.verifications.pop(transaction_id, None)
 
     def get_sas_emojis(self, transaction_id: str):
-        """Get the emoji list for an active SAS verification."""
         if transaction_id in self.verifications:
             sas = self.verifications[transaction_id]
-            if hasattr(sas, 'get_emoji'):
-                return sas.get_emoji()
+            if hasattr(sas, 'get_emoji') and getattr(sas, 'chosen_key_agreement', None):
+                try: return sas.get_emoji()
+                except: return None
         return None
     
     async def _sync_loop(self):
-        """Main sync loop."""
-        logger.info("Starting sync loop")
-        
         try:
-            # Initial sync
+            # We must use 'since' to acknowledge to-device messages
             response = await self.client.sync(timeout=30000)
-            
-            if self.on_sync:
-                try:
-                    self.on_sync(response if isinstance(response, SyncResponse) else None)
-                except Exception as e:
-                    logger.error(f"Error in initial on_sync callback: {e}")
-            
-            # Continuous sync
             while True:
-                response = await self.client.sync(timeout=30000)
-                
+                response = await self.client.sync(timeout=30000, since=response.next_batch)
                 if isinstance(response, SyncResponse):
-                    logger.debug(f"Sync successful, received {len(response.rooms.join)} joined rooms")
-                    if self.on_sync:
-                        try:
-                            self.on_sync(response)
-                        except Exception as e:
-                            logger.error(f"Error in on_sync callback: {e}")
-                else:
-                    logger.warning(f"Sync error: {response}")
-                
-                # Process next sync immediately
-                pass
-                
-        except asyncio.CancelledError:
-            logger.info("Sync loop cancelled")
+                    if self.on_sync: self.on_sync(response)
+                    # Background E2EE tasks
+                    if self.client.should_query_keys: await self.client.keys_query()
+                    if self.client.should_upload_keys: await self.client.keys_upload()
         except Exception as e:
             logger.error(f"Sync loop error: {e}")
     
     async def stop_sync(self):
-        """Stop sync loop."""
         if self._sync_task:
             self._sync_task.cancel()
-            try:
-                await self._sync_task
-            except asyncio.CancelledError:
-                pass
+            try: await self._sync_task
+            except: pass
             self._sync_task = None
     
     async def send_message(self, room_id: str, message: str, reply_to_id: Optional[str] = None, reply_to_body: Optional[str] = None):
-        """Send a text message to a room.
-        
-        Args:
-            room_id: Room ID to send message to
-            message: Message text
-            reply_to_id: Optional event ID to reply to
-            reply_to_body: Optional body of the message being replied to
-        """
-        if not self.client:
-            logger.error("Client not initialized")
-            return
-        
-        content = {
-            "msgtype": "m.text",
-            "body": message
-        }
-        
-        if reply_to_id:
-            # We don't prepend the quote to 'body' anymore because modern clients 
-            # show it automatically via m.relates_to, and manual prepending 
-            # causes double-quotes in some clients.
-            content["m.relates_to"] = {
-                "m.in_reply_to": {
-                    "event_id": reply_to_id
-                }
-            }
-        
-        try:
-            await self.client.room_send(
-                room_id=room_id,
-                message_type="m.room.message",
-                content=content
-            )
-        except Exception as e:
-            logger.error(f"Failed to send message: {e}")
+        if not self.client: return
+        content = {"msgtype": "m.text", "body": message}
+        if reply_to_id: content["m.relates_to"] = {"m.in_reply_to": {"event_id": reply_to_id}}
+        try: await self.client.room_send(room_id=room_id, message_type="m.room.message", content=content)
+        except: pass
     
     async def join_room(self, room_id_or_alias: str) -> bool:
-        """Join a room or space.
-        
-        Args:
-            room_id_or_alias: Room ID or alias (e.g., #room:server.org)
-            
-        Returns:
-            True if joined successfully
-        """
-        if not self.client:
-            return False
-        
+        if not self.client: return False
         try:
             response = await self.client.join(room_id_or_alias)
             return hasattr(response, 'room_id')
-        except Exception as e:
-            logger.error(f"Failed to join room: {e}")
-            return False
-    
-    async def leave_room(self, room_id: str) -> bool:
-        """Leave a room or space.
-        
-        Args:
-            room_id: Room ID to leave
-            
-        Returns:
-            True if left successfully
-        """
-        if not self.client:
-            return False
-        
-        try:
-            await self.client.room_leave(room_id)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to leave room: {e}")
-            return False
+        except: return False
     
     def get_rooms(self) -> Dict[str, MatrixRoom]:
-        """Get all joined rooms.
-        
-        Returns:
-            Dictionary mapping room_id to MatrixRoom
-        """
-        if not self.client:
-            return {}
-            
-        return self.client.rooms
+        return self.client.rooms if self.client else {}
 
     def get_hierarchy(self):
-        """Build space/room hierarchy using nio's built-in room attributes.
-        
-        Returns:
-            Dictionary containing spaces info, children mapping, top-level spaces and orphans.
-        """
-        if not self.client:
-            return {"spaces": {}, "children": {}, "top_level_spaces": [], "orphans": []}
-            
+        if not self.client: return {"spaces": {}, "children": {}, "top_level_spaces": [], "orphans": []}
         rooms = self.client.rooms
         joined_ids = set(rooms.keys())
-        
-        # Identify which rooms are spaces
-        spaces_map = {} # room_id -> bool
+        spaces_map = {rid: (room.room_type == "m.space") for rid, room in rooms.items()}
+        children_map, parents_map = {}, {}
         for room_id, room in rooms.items():
-            # nio's MatrixRoom has a room_type attribute
-            spaces_map[room_id] = (room.room_type == "m.space")
-            
-        # Build relationship maps using nio's built-in children and parents sets
-        # nio.rooms.MatrixRoom has .children and .parents which are sets of room_ids
-        children_map = {} # parent -> [children]
-        parents_map = {} # child -> [parents]
-        
-        for room_id, room in rooms.items():
-            # children and parents are sets of strings (room IDs)
             valid_children = [cid for cid in room.children if cid in joined_ids]
             if valid_children:
                 children_map[room_id] = valid_children
-                for cid in valid_children:
-                    parents_map.setdefault(cid, []).append(room_id)
-            
-            # We also check room.parents to be safe
+                for cid in valid_children: parents_map.setdefault(cid, []).append(room_id)
             valid_parents = [pid for pid in room.parents if pid in joined_ids]
             for pid in valid_parents:
                 parents_map.setdefault(room_id, []).append(pid)
                 children_map.setdefault(pid, []).append(room_id)
-        
-        # Deduplicate and finalize maps
-        for k in children_map:
-            children_map[k] = list(set(children_map[k]))
-        for k in parents_map:
-            parents_map[k] = list(set(parents_map[k]))
-            
-        # Top-level spaces: Spaces that don't have a joined parent
-        top_level_spaces = [rid for rid, is_space in spaces_map.items() 
-                           if is_space and not parents_map.get(rid)]
-        
-        # Orphans: Rooms that are not spaces and don't have a joined parent
-        orphans = [rid for rid, is_space in spaces_map.items() 
-                  if not is_space and not parents_map.get(rid)]
-        
-        # Sort by name for consistency
-        def sort_key(rid):
-            room = rooms.get(rid)
-            return (room.display_name or rid).lower() if room else rid.lower()
-            
-        top_level_spaces.sort(key=sort_key)
-        orphans.sort(key=sort_key)
-        for k in children_map:
-            children_map[k].sort(key=sort_key)
-            
-        return {
-            "spaces": spaces_map,
-            "children": children_map,
-            "top_level_spaces": top_level_spaces,
-            "orphans": orphans
-        }
+        for k in children_map: children_map[k] = list(set(children_map[k]))
+        for k in parents_map: parents_map[k] = list(set(parents_map[k]))
+        top_level_spaces = sorted([rid for rid, is_space in spaces_map.items() if is_space and not parents_map.get(rid)], key=lambda rid: (rooms.get(rid).display_name or rid).lower())
+        orphans = sorted([rid for rid, is_space in spaces_map.items() if not is_space and not parents_map.get(rid)], key=lambda rid: (rooms.get(rid).display_name or rid).lower())
+        for k in children_map: children_map[k].sort(key=lambda rid: (rooms.get(rid).display_name or rid).lower() if rooms.get(rid) else rid.lower())
+        return {"spaces": spaces_map, "children": children_map, "top_level_spaces": top_level_spaces, "orphans": orphans}
     
     async def get_room_messages(self, room_id: str, limit: int = 50, start: Optional[str] = None):
-        """Fetch historical messages from a room.
-        
-        Args:
-            room_id: Room ID
-            limit: Number of messages to fetch
-            start: Pagination token to start from
-            
-        Returns:
-            RoomMessagesResponse or Error
-        """
-        if not self.client:
-            return None
-            
+        if not self.client: return None
         try:
             response = await self.client.room_messages(room_id, start=start, limit=limit)
-            
             if isinstance(response, RoomMessagesResponse) and hasattr(response, 'chunk'):
-                logger.debug(f"Fetched {len(response.chunk)} messages for room {room_id}")
-                # Attempt to decrypt encrypted historical messages
                 for event in response.chunk:
                     if isinstance(event, MegolmEvent):
                         try:
-                            logger.debug(f"Attempting to decrypt historical event {event.event_id}")
-                            # client.decrypt_event returns the decrypted event or raises
-                            decrypted_event = self.client.decrypt_event(event)
-                            
-                            if not isinstance(decrypted_event, MegolmEvent):
-                                logger.debug(f"Successfully decrypted historical event {event.event_id}")
+                            decrypted = self.client.decrypt_event(event)
+                            if not isinstance(decrypted, MegolmEvent):
                                 index = response.chunk.index(event)
-                                response.chunk[index] = decrypted_event
+                                response.chunk[index] = decrypted
                             else:
-                                logger.debug(f"Decryption failed for historical event {event.event_id} (still MegolmEvent)")
-                        except Exception as e:
-                            logger.error(f"Error decrypting historical event {event.event_id}: {e}")
-            else:
-                logger.warning(f"Room messages response for {room_id} was not RoomMessagesResponse: {response}")
-            
+                                # Still undecryptable, request keys from other devices
+                                await self.client.request_room_key(event)
+                        except: pass
             return response
-        except Exception as e:
-            logger.error(f"Failed to fetch room messages: {e}")
-            return None
+        except: return None
 
     async def get_user_profile(self, user_id: str) -> Dict[str, Any]:
-        """Fetch user profile information with caching and request coalescing.
-        
-        Args:
-            user_id: Matrix user ID
-            
-        Returns:
-            Dictionary with displayname and avatar_url
-        """
-        if not self.client:
-            return {}
-            
-        # Check cache first
-        if user_id in self._profile_cache:
-            return self._profile_cache[user_id]
-            
-        # Check if a request is already in progress
+        if not self.client: return {}
+        if user_id in self._profile_cache: return self._profile_cache[user_id]
         if user_id in self._profile_requests:
-            try:
-                return await self._profile_requests[user_id]
-            except Exception:
-                return {}
-                
-        # Start new request task
+            try: return await self._profile_requests[user_id]
+            except: return {}
         async def _fetch():
             try:
                 response = await self.client.get_profile(user_id)
                 if isinstance(response, ProfileGetResponse):
-                    profile = {
-                        "displayname": response.displayname,
-                        "avatar_url": response.avatar_url
-                    }
+                    profile = {"displayname": response.displayname, "avatar_url": response.avatar_url}
                     self._profile_cache[user_id] = profile
                     self._save_profile_cache()
                     return profile
-            except Exception as e:
-                logger.debug(f"Failed to fetch profile for {user_id}: {e}")
-            finally:
-                # Remove from active requests
-                self._profile_requests.pop(user_id, None)
+            except: pass
+            finally: self._profile_requests.pop(user_id, None)
             return {}
-
         task = asyncio.create_task(_fetch())
         self._profile_requests[user_id] = task
         return await task
     
     async def close(self):
-        """Close the client connection."""
         await self.stop_sync()
-        
-        if self.client:
-            await self.client.close()
-            self.client = None
+        if self.client: await self.client.close(); self.client = None
