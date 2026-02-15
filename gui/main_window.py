@@ -10,11 +10,12 @@ import gi
 gi.require_version('Gtk', '4.0')
 gi.require_version('Adw', '1')
 
-from gi.repository import Gtk, Adw, GLib
+from gi.repository import Gtk, Adw, GLib, GObject
 
 from .room_list import RoomListView
 from .message_view import MessageView
 from .member_list import MemberListView
+from .verification_dialog import VerificationDialog
 
 logger = logging.getLogger(__name__)
 
@@ -38,6 +39,9 @@ class MainWindow(Adw.ApplicationWindow):
         self.current_room_id = None
         self._last_sync_time = 0
         
+        # Track active verification dialogs: tx_id -> dialog
+        self._verification_dialogs = {}
+        
         self.set_default_size(1200, 800)
         self.set_title("OMOMatrix")
         
@@ -45,9 +49,7 @@ class MainWindow(Adw.ApplicationWindow):
         try:
             from gi.repository import Gdk
             texture = Gdk.Texture.new_from_filename("/home/omori/omomatrix/icon.png")
-            self.set_icon_name("omomatrix") # For theme engines
-            # In some GTK4 versions we might need a different way, 
-            # but usually setting the icon on the window or application is enough.
+            self.set_icon_name("omomatrix") 
         except Exception as e:
             logger.error(f"Failed to set MainWindow icon: {e}")
         
@@ -56,19 +58,51 @@ class MainWindow(Adw.ApplicationWindow):
         
         # Set up callbacks
         self.matrix_client.on_sync = self.on_sync
+        self.matrix_client.on_verification_event = self.on_verification_event
     
     def on_sync(self, response=None):
         """Called when Matrix sync completes."""
         logger.debug(f"on_sync callback triggered with response: {type(response).__name__ if response else 'None'}")
         
-        # MessageView handles its own events directly via client callbacks,
-        # but RoomListView needs the sync response to update unread counts/ordering.
-        # We no longer throttle RoomList updates because they are now incremental and fast.
         if response:
             self.room_list.refresh_rooms(response)
         else:
             # Initial sync or force refresh
             self.room_list.refresh_rooms(None)
+
+    def on_verification_event(self, state, event):
+        """Handle SAS verification events from the client."""
+        tx_id = event.transaction_id
+        
+        def handle():
+            if state == "start":
+                # Show incoming verification dialog
+                # Pass self.app.loop directly
+                dialog = VerificationDialog(self, self.matrix_client, self.app.loop, tx_id, event.sender)
+                self._verification_dialogs[tx_id] = dialog
+                dialog.present()
+                
+                # Automatically accept the START to proceed to key exchange
+                self.app.loop.create_task(self.matrix_client.accept_verification(tx_id))
+                
+            elif state in ["key", "accept"]:
+                # Both sides have shared keys, we can now show emojis
+                dialog = self._verification_dialogs.get(tx_id)
+                if dialog:
+                    emojis = self.matrix_client.get_sas_emojis(tx_id)
+                    if emojis:
+                        dialog.show_emojis(emojis)
+                        
+            elif state == "cancel":
+                dialog = self._verification_dialogs.pop(tx_id, None)
+                if dialog:
+                    dialog.close()
+                    
+            elif state == "mac":
+                # Verification done
+                logger.info(f"Verification {tx_id} completed successfully")
+                
+        GLib.idle_add(handle)
 
     def _build_ui(self):
         """Build the main window UI."""
@@ -99,13 +133,11 @@ class MainWindow(Adw.ApplicationWindow):
         self.paned.set_vexpand(True)
         
         # Left sidebar - Room list
-        # Pass app to RoomListView for async task creation
         self.room_list = RoomListView(self.app, self.matrix_client)
         self.room_list.set_size_request(280, -1)
         self.room_list.connect('room-selected', self.on_room_selected)
         
         # Center - Message view
-        # Pass app to MessageView for async task creation
         self.message_view = MessageView(self.app, self.matrix_client, self.avatar_manager)
         
         # Right sidebar - Member list

@@ -9,12 +9,11 @@
 }
 
 avatar {
-    border-radius: 10px !important;
-    overflow: hidden;
+    border-radius: 10px;
 }
 
 .avatar, .room-avatar, .member-avatar {
-    border-radius: 10px !important;
+    border-radius: 10px;
 }
 
 .reply-preview {
@@ -71,29 +70,26 @@ avatar {
 .message-image {
     border-radius: 12px;
     margin: 4px 0;
-    max-width: 400px;
 }
 
 .space-name {
     font-weight: bold;
 }
 
-/* HIDE THE LEFT ARROW COMPLETELY */
+/* Gtk.Expander styling */
+/* We use opacity and width/height 0 to hide it without invalid 'display' property */
 expander.room-expander > title > arrow {
-    display: none !important;
-    opacity: 0 !important;
-    -gtk-icon-size: 0 !important;
-    width: 0 !important;
-    height: 0 !important;
-    margin: 0 !important;
-    padding: 0 !important;
+    opacity: 0;
+    width: 0;
+    height: 0;
 }
 
 expander.room-expander > title {
     padding: 4px 8px;
     border-radius: 6px;
     margin: 0;
-    margin-start: -24px; /* Pull content to the left to occupy the arrow's space */
+    /* Use a standard property for indentation if possible, 
+       otherwise we rely on the header box content */
 }
 
 expander.room-expander > title:hover {

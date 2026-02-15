@@ -21,6 +21,13 @@ from nio import (
     RoomGetEventError,
     RoomMessagesResponse,
     ProfileGetResponse,
+    ToDeviceEvent,
+    KeyVerificationEvent,
+    KeyVerificationStart,
+    KeyVerificationCancel,
+    KeyVerificationKey,
+    KeyVerificationMac,
+    KeyVerificationAccept,
     crypto
 )
 
@@ -48,8 +55,12 @@ class MatrixClient:
         # Callbacks
         self.on_sync: Optional[Callable] = None
         self.on_message: Optional[Callable] = None
+        self.on_verification_event: Optional[Callable] = None # For SAS UI
         
         self._sync_task: Optional[asyncio.Task] = None
+        
+        # Active verification sessions: transaction_id -> Sas object
+        self.verifications: Dict[str, Any] = {}
         
         # Performance optimizations
         self._profile_cache: Dict[str, Dict[str, Any]] = {}
@@ -191,8 +202,83 @@ class MatrixClient:
             self.client.add_event_callback(self.on_message, RoomMessageImage)
             self.client.add_event_callback(self.on_message, MegolmEvent)
         
+        # Register E2EE verification callbacks
+        self.client.add_to_device_callback(self.handle_verification_event, KeyVerificationEvent)
+        
         # Start sync task
         self._sync_task = asyncio.create_task(self._sync_loop())
+
+    async def handle_verification_event(self, event):
+        """Handle incoming E2EE verification events."""
+        logger.info(f"Received verification event: {type(event).__name__}")
+        
+        if isinstance(event, KeyVerificationStart):
+            # Someone started a verification with us
+            # In matrix-nio, the Sas object is created automatically when we receive start
+            if event.transaction_id not in self.verifications:
+                self.verifications[event.transaction_id] = self.client.key_verifications[event.transaction_id]
+            
+            if self.on_verification_event:
+                self.on_verification_event("start", event)
+                
+        elif isinstance(event, KeyVerificationCancel):
+            self.verifications.pop(event.transaction_id, None)
+            if self.on_verification_event:
+                self.on_verification_event("cancel", event)
+                
+        elif isinstance(event, KeyVerificationKey):
+            if self.on_verification_event:
+                self.on_verification_event("key", event)
+                
+        elif isinstance(event, KeyVerificationMac):
+            if self.on_verification_event:
+                self.on_verification_event("mac", event)
+                
+        elif isinstance(event, KeyVerificationAccept):
+            if self.on_verification_event:
+                self.on_verification_event("accept", event)
+
+    async def start_verification(self, user_id: str, device_id: str):
+        """Initiate verification with another device."""
+        if not self.client: return
+        
+        response = await self.client.verify_device(user_id, device_id)
+        if response:
+            # Response is typically the transaction ID
+            self.verifications[response] = self.client.key_verifications[response]
+            return response
+        return None
+
+    async def accept_verification(self, transaction_id: str):
+        """Accept an incoming verification request."""
+        if transaction_id in self.verifications:
+            await self.client.accept_verification(transaction_id)
+            # This triggers the SAS exchange
+
+    async def confirm_sas(self, transaction_id: str):
+        """Confirm that SAS (emojis) match."""
+        if transaction_id in self.verifications:
+            sas = self.verifications[transaction_id]
+            # In nio, we call accept_sas on the Sas object
+            # and then get the MAC to send
+            sas.accept_sas()
+            mac_event = sas.get_mac()
+            await self.client.to_device(mac_event)
+            logger.info(f"SAS confirmed for {transaction_id}")
+
+    async def cancel_verification(self, transaction_id: str):
+        """Cancel an active verification."""
+        if transaction_id in self.verifications:
+            await self.client.cancel_verification(transaction_id)
+            self.verifications.pop(transaction_id, None)
+
+    def get_sas_emojis(self, transaction_id: str):
+        """Get the emoji list for an active SAS verification."""
+        if transaction_id in self.verifications:
+            sas = self.verifications[transaction_id]
+            if hasattr(sas, 'get_emoji'):
+                return sas.get_emoji()
+        return None
     
     async def _sync_loop(self):
         """Main sync loop."""

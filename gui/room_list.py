@@ -242,7 +242,15 @@ class RoomListView(Gtk.Box):
         label = Gtk.Label(label=room.display_name or room_id)
         label.set_halign(Gtk.Align.START)
         label.set_ellipsize(3)
+        label.set_hexpand(True) # Push everything else to the right
         box.append(label)
+        
+        # Encryption Indicator
+        if hasattr(room, 'encrypted') and room.encrypted:
+            lock_icon = Gtk.Image.new_from_icon_name("security-high-symbolic")
+            lock_icon.set_opacity(0.5)
+            lock_icon.set_tooltip_text("End-to-End Encrypted")
+            box.append(lock_icon)
         
         row.set_child(box)
         self.room_rows[room_id] = row
